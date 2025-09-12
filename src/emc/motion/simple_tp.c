@@ -28,6 +28,7 @@ void simple_tp_update(simple_tp_t *tp, double period)
 	   pos_err to zero, but allows for stopping without position
 	   overshoot */
 	pos_err = tp->pos_cmd - tp->curr_pos;
+	//rtapi_print_msg(RTAPI_MSG_ERR,"pos_err: %f max_vel: %f max_acc: %f \n", pos_err, tp->max_vel, tp->max_acc);
 	/* positive and negative errors require some sign flipping to
 	   avoid sqrt(negative) */
 	if (pos_err > tiny_dp) {

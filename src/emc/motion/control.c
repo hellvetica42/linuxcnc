@@ -264,6 +264,25 @@ void emcmotController(void *arg, long period)
     }
 
     get_pos_cmds(period);
+
+
+    // ADD POSITION COMMAND OVERRIDE
+    /*
+    for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
+
+        emcmotStatus->axis_status[n].pos_cmd_override = axis_get_pos_cmd_override(n);
+        emcmotStatus->axis_status[n].pos_cmd_override_enable = axis_get_pos_cmd_override_enable(n);
+
+        if (emcmotStatus->axis_status[n].pos_cmd_override_enable) {
+            
+            // Replace the calculated position with override value
+            *pcmd_p[n] = emcmotStatus->axis_status[n].pos_cmd_override;
+            rtapi_print_msg(RTAPI_MSG_ERR,"Axis %d :%f\n",n, emcmotStatus->axis_status[n].pos_cmd_override);
+        }
+        // If not enabled, pcmd_p[n] keeps its calculated value from get_pos_cmds()
+    }
+    */
+
     compute_screw_comp();
     *(emcmot_hal_data->eoffset_active) = axis_plan_external_offsets(servo_period, GET_MOTION_ENABLE_FLAG(), get_allhomed());
     output_to_hal();
@@ -2119,6 +2138,8 @@ static void update_status(void)
         axis_status->teleop_vel_cmd = axis_get_teleop_vel_cmd(axis_num);
         axis_status->max_pos_limit = axis_get_max_pos_limit(axis_num);
         axis_status->min_pos_limit = axis_get_min_pos_limit(axis_num);
+        axis_status->pos_cmd_override = axis_get_pos_cmd_override(axis_num);
+        axis_status->pos_cmd_override_enable = axis_get_pos_cmd_override_enable(axis_num);
     }
     emcmotStatus->eoffset_pose.tran.x = axis_get_ext_offset_curr_pos(0);
     emcmotStatus->eoffset_pose.tran.y = axis_get_ext_offset_curr_pos(1);

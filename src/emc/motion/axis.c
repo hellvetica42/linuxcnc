@@ -14,6 +14,9 @@ typedef struct {
     double acc_limit;               /* upper limit of axis accel */
     simple_tp_t teleop_tp;          /* planner for teleop mode motion */
 
+    double pos_cmd_override;
+    bool pos_cmd_override_enable;
+
     int old_ajog_counts;            /* prior value, used for deltas */
     int kb_ajog_active;             /* non-zero during a keyboard jog */
     int wheel_ajog_active;          /* non-zero during a wheel jog */
@@ -46,6 +49,9 @@ typedef struct {
     hal_float_t *eoffset_scale;
     hal_float_t *external_offset;
     hal_float_t *external_offset_requested;
+
+    hal_float_t *pos_cmd_override;
+    hal_bit_t *pos_cmd_override_enable;
 } axis_hal_t;
 
 
@@ -136,6 +142,10 @@ int axis_init_hal_io(int mot_comp_id)
         CALL_CHECK(hal_pin_s32_newf(HAL_IN, &axis_data->eoffset_counts, mot_comp_id, "axis.%c.eoffset-counts", c));
         CALL_CHECK(hal_pin_float_newf(HAL_IN, &axis_data->eoffset_scale, mot_comp_id, "axis.%c.eoffset-scale", c));
         CALL_CHECK(hal_pin_float_newf(HAL_OUT, &axis_data->external_offset, mot_comp_id, "axis.%c.eoffset", c));
+
+        CALL_CHECK(hal_pin_float_newf(HAL_IN, &axis_data->pos_cmd_override, mot_comp_id, "axis.%c.pos-cmd-override", c));
+        CALL_CHECK(hal_pin_bit_newf(HAL_IN, &axis_data->pos_cmd_override_enable, mot_comp_id, "axis.%c.pos-cmd-override-enable", c));
+
         CALL_CHECK(hal_pin_float_newf(HAL_OUT, &axis_data->external_offset_requested,
            mot_comp_id, "axis.%c.eoffset-request", c));
 
@@ -229,6 +239,18 @@ double axis_get_acc_limit(int axis_num)
 double axis_get_teleop_vel_cmd(int axis_num)
 {
     return axis_array[axis_num].teleop_vel_cmd;
+}
+
+double axis_get_pos_cmd_override(int axis_num)
+{
+    axis_hal_t *axis_data = &hal_data->axis[axis_num];
+    return *(axis_data->pos_cmd_override);
+}
+
+bool axis_get_pos_cmd_override_enable(int axis_num)
+{
+    axis_hal_t *axis_data = &hal_data->axis[axis_num];
+    return *(axis_data->pos_cmd_override_enable);
 }
 
 int axis_get_locking_joint(int axis_num)
@@ -663,6 +685,15 @@ int axis_calc_motion(double servo_period)
         if (axis->teleop_tp.max_vel > axis->vel_limit) {
             axis->teleop_tp.max_vel = axis->vel_limit;
         }
+
+        if (axis_get_pos_cmd_override_enable(axis_num)) {
+            // Set the trajectory planner's target to your override value
+            axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
+            axis->teleop_tp.enable  = 1;
+            axis->teleop_tp.max_vel = axis->vel_limit;
+            axis->teleop_tp.max_acc = axis->acc_limit;
+        }
+
         if (update_teleop_with_check(axis_num, &(axis->teleop_tp), servo_period)) {
             violated_teleop_limit = 1;
         } else {
