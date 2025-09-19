@@ -679,6 +679,18 @@ int axis_calc_motion(double servo_period)
     int violated_teleop_limit = 0;
     emcmot_axis_t *axis;
 
+    double dist[EMCMOT_MAX_AXIS];
+    double total_dist = 0.0;
+
+    // 1. Compute distances
+    for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
+        dist[n] = fabs(axis_get_pos_cmd_override(n) - axis_array[n].teleop_tp.curr_pos);
+        total_dist += dist[n] * dist[n];
+    }
+    total_dist = sqrt(total_dist);
+    if (total_dist < 1e-4) total_dist = 0.0;
+
+
     for (axis_num = 0; axis_num < EMCMOT_MAX_AXIS; axis_num++) {
         axis = &axis_array[axis_num];
         // teleop_tp.max_vel is always positive
@@ -690,8 +702,15 @@ int axis_calc_motion(double servo_period)
             // Set the trajectory planner's target to your override value
             axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
             axis->teleop_tp.enable  = 1;
-            axis->teleop_tp.max_vel = axis->vel_limit;
-            axis->teleop_tp.max_acc = axis->acc_limit;
+            if (total_dist > 0.0) {
+                // Scale the max_vel and max_acc to reach all targets simultaneously
+                axis->teleop_tp.max_vel = axis->vel_limit * (dist[axis_num] / total_dist);
+                axis->teleop_tp.max_acc = axis->acc_limit * (dist[axis_num] / total_dist);
+            }
+            else{
+                axis->teleop_tp.max_vel = 0.0;
+                axis->teleop_tp.max_acc = 0.0;
+            }
         }
 
         if (update_teleop_with_check(axis_num, &(axis->teleop_tp), servo_period)) {
