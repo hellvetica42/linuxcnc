@@ -15,6 +15,7 @@ typedef struct {
     simple_tp_t teleop_tp;          /* planner for teleop mode motion */
 
     double pos_cmd_override;
+    double vel_cmd_override;
     bool pos_cmd_override_enable;
 
     int old_ajog_counts;            /* prior value, used for deltas */
@@ -51,6 +52,7 @@ typedef struct {
     hal_float_t *external_offset_requested;
 
     hal_float_t *pos_cmd_override;
+    hal_float_t *vel_cmd_override;
     hal_bit_t *pos_cmd_override_enable;
 } axis_hal_t;
 
@@ -144,6 +146,7 @@ int axis_init_hal_io(int mot_comp_id)
         CALL_CHECK(hal_pin_float_newf(HAL_OUT, &axis_data->external_offset, mot_comp_id, "axis.%c.eoffset", c));
 
         CALL_CHECK(hal_pin_float_newf(HAL_IN, &axis_data->pos_cmd_override, mot_comp_id, "axis.%c.pos-cmd-override", c));
+        CALL_CHECK(hal_pin_float_newf(HAL_IN, &axis_data->vel_cmd_override, mot_comp_id, "axis.%c.vel-cmd-override", c));
         CALL_CHECK(hal_pin_bit_newf(HAL_IN, &axis_data->pos_cmd_override_enable, mot_comp_id, "axis.%c.pos-cmd-override-enable", c));
 
         CALL_CHECK(hal_pin_float_newf(HAL_OUT, &axis_data->external_offset_requested,
@@ -246,6 +249,13 @@ double axis_get_pos_cmd_override(int axis_num)
     axis_hal_t *axis_data = &hal_data->axis[axis_num];
     return *(axis_data->pos_cmd_override);
 }
+
+double axis_get_vel_cmd_override(int axis_num)
+{
+    axis_hal_t *axis_data = &hal_data->axis[axis_num];
+    return *(axis_data->vel_cmd_override);
+}
+
 
 bool axis_get_pos_cmd_override_enable(int axis_num)
 {
@@ -673,6 +683,11 @@ static int update_teleop_with_check(int axis_num, simple_tp_t *the_tp, double se
     return 0;
 }
 
+static double last_target[EMCMOT_MAX_AXIS] = {0};
+static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};
+static double latched_max_acc[EMCMOT_MAX_AXIS] = {0};
+static bool first_move = true;
+
 int axis_calc_motion(double servo_period)
 {
     int axis_num;
@@ -681,14 +696,32 @@ int axis_calc_motion(double servo_period)
 
     double dist[EMCMOT_MAX_AXIS];
     double total_dist = 0.0;
+    int new_move = 0;
 
     // 1. Compute distances
     for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
-        dist[n] = fabs(axis_get_pos_cmd_override(n) - axis_array[n].teleop_tp.curr_pos);
+        double target = axis_get_pos_cmd_override(n);
+        dist[n] = fabs(target - axis_array[n].teleop_tp.curr_pos);
         total_dist += dist[n] * dist[n];
+
+        if(axis_get_pos_cmd_override_enable(n) && target != last_target[n]) {
+            new_move = 1;
+        }
     }
     total_dist = sqrt(total_dist);
-    if (total_dist < 1e-4) total_dist = 0.0;
+    if (total_dist < 1e-4) total_dist = 1.0;
+
+    if((new_move || first_move) && total_dist > 0.0) {
+        first_move = false;
+        // latch max_vel and max_acc for each axis
+        for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
+            if(axis_get_pos_cmd_override_enable(n)) {
+                last_target[n] = axis_get_pos_cmd_override(n);
+                latched_max_vel[n] = axis_get_vel_cmd_override(n) * (dist[n] / total_dist);
+                latched_max_acc[n] = axis_array[n].acc_limit * (dist[n] / total_dist);
+            }
+        }
+    }
 
 
     for (axis_num = 0; axis_num < EMCMOT_MAX_AXIS; axis_num++) {
@@ -701,16 +734,9 @@ int axis_calc_motion(double servo_period)
         if (axis_get_pos_cmd_override_enable(axis_num)) {
             // Set the trajectory planner's target to your override value
             axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
-            axis->teleop_tp.enable  = 1;
-            if (total_dist > 0.0) {
-                // Scale the max_vel and max_acc to reach all targets simultaneously
-                axis->teleop_tp.max_vel = axis->vel_limit * (dist[axis_num] / total_dist);
-                axis->teleop_tp.max_acc = axis->acc_limit * (dist[axis_num] / total_dist);
-            }
-            else{
-                axis->teleop_tp.max_vel = 0.0;
-                axis->teleop_tp.max_acc = 0.0;
-            }
+            axis->teleop_tp.enable = 1;
+            axis->teleop_tp.max_vel = latched_max_vel[axis_num];
+            axis->teleop_tp.max_acc = axis_array[axis_num].acc_limit;
         }
 
         if (update_teleop_with_check(axis_num, &(axis->teleop_tp), servo_period)) {

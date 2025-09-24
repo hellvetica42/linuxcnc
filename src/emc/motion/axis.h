@@ -45,6 +45,7 @@ double axis_get_ext_offset_curr_pos(int axis_num);
 double axis_get_teleop_vel_cmd(int axis_num);
 
 double axis_get_pos_cmd_override(int axis_num);
+double axis_get_vel_cmd_override(int axis_num);
 bool axis_get_pos_cmd_override_enable(int axis_num);
 
 void axis_sync_teleop_tp_to_carte_pos(int extfactor, double *pcmd_p[]);
