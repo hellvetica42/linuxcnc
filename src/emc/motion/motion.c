@@ -592,6 +592,11 @@ static int init_hal_io(void)
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->last_period_ns), mot_comp_id, "motion.servo.last-period-ns"));
 #endif
 
+    // export realtime cartesian position feedback pins (from encoder via forward kinematics)
+    CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_x), mot_comp_id, "motion.pos-fb.x"));
+    CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_y), mot_comp_id, "motion.pos-fb.y"));
+    CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_z), mot_comp_id, "motion.pos-fb.z"));
+
     // export timing related HAL pins so they can be scoped
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->tooloffset_x), mot_comp_id, "motion.tooloffset.x"));
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->tooloffset_y), mot_comp_id, "motion.tooloffset.y"));

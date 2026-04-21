@@ -174,6 +174,10 @@ typedef struct {
     hal_u32_t   *last_period;	/* pin: last period in clocks */
     hal_float_t *last_period_ns;	/* pin: last period in nanoseconds */
 
+    hal_float_t *carte_pos_fb_x;    /* OUT: cartesian feedback X (from encoders, realtime) */
+    hal_float_t *carte_pos_fb_y;    /* OUT: cartesian feedback Y (from encoders, realtime) */
+    hal_float_t *carte_pos_fb_z;    /* OUT: cartesian feedback Z (from encoders, realtime) */
+
     hal_float_t *tooloffset_x;
     hal_float_t *tooloffset_y;
     hal_float_t *tooloffset_z;

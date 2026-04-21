@@ -1880,6 +1880,11 @@ static void output_to_hal(void)
     *(emcmot_hal_data->coord_error) = GET_MOTION_ERROR_FLAG();
     *(emcmot_hal_data->on_soft_limit) = emcmotStatus->on_soft_limit;
 
+    /* output realtime cartesian feedback from encoder (forward kinematics result) */
+    *(emcmot_hal_data->carte_pos_fb_x) = emcmotStatus->carte_pos_fb.tran.x;
+    *(emcmot_hal_data->carte_pos_fb_y) = emcmotStatus->carte_pos_fb.tran.y;
+    *(emcmot_hal_data->carte_pos_fb_z) = emcmotStatus->carte_pos_fb.tran.z;
+
     switch (emcmotStatus->motionType) {
         case EMC_MOTION_TYPE_FEED: //fall thru
         case EMC_MOTION_TYPE_ARC:
