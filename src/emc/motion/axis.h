@@ -56,6 +56,13 @@ int axis_update_coord_with_bound(double *pcmd_p[], double servo_period);
 
 int axis_calc_motion(double servo_period);
 
+/* DELTAsort position-override safety */
+void axis_override_hold(void);
+bool axis_override_is_held(void);
+void axis_override_set_target_ok(bool ok);
+void axis_override_reject_step(void);
+void axis_override_set_seq(unsigned int seq);
+
 
 #ifdef __cplusplus
 }

@@ -177,6 +177,8 @@ typedef struct {
     hal_float_t *carte_pos_fb_x;    /* OUT: cartesian feedback X (from encoders, realtime) */
     hal_float_t *carte_pos_fb_y;    /* OUT: cartesian feedback Y (from encoders, realtime) */
     hal_float_t *carte_pos_fb_z;    /* OUT: cartesian feedback Z (from encoders, realtime) */
+    hal_u32_t   *override_seq;      /* IN: bumped by the host after writing a complete override target */
+    hal_bit_t   *override_held;     /* OUT: override is holding (abort / limit / refused target) */
 
     hal_float_t *tooloffset_x;
     hal_float_t *tooloffset_y;

@@ -596,6 +596,9 @@ static int init_hal_io(void)
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_x), mot_comp_id, "motion.pos-fb.x"));
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_y), mot_comp_id, "motion.pos-fb.y"));
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->carte_pos_fb_z), mot_comp_id, "motion.pos-fb.z"));
+    // position-override commit counter and hold status (see axis.c)
+    CALL_CHECK(hal_pin_u32_newf(HAL_IN, &(emcmot_hal_data->override_seq), mot_comp_id, "motion.pos-cmd-override-seq"));
+    CALL_CHECK(hal_pin_bit_newf(HAL_OUT, &(emcmot_hal_data->override_held), mot_comp_id, "motion.pos-cmd-override-held"));
 
     // export timing related HAL pins so they can be scoped
     CALL_CHECK(hal_pin_float_newf(HAL_OUT, &(emcmot_hal_data->tooloffset_x), mot_comp_id, "motion.tooloffset.x"));

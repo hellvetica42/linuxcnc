@@ -349,6 +349,9 @@ void axis_jog_abs(int axis_num, double offset, double vel)
     axis->teleop_tp.enable = 1;
 }
 
+/* DELTAsort position override: set on abort/limit/error, cleared by a new valid target */
+static bool override_hold = false;
+
 bool axis_jog_abort(int axis_num, bool immediate)
 {
     bool aborted = 0;
@@ -369,6 +372,9 @@ bool axis_jog_abort_all(bool immediate)
 {
     int n;
     bool aborted = 0;
+    /* any abort (task abort, soft limit, disable, mode change) also stops the
+       position override until the host commits a new target */
+    override_hold = true;
     for (n = 0; n < EMCMOT_MAX_AXIS; n++) {
         if (axis_jog_abort(n, immediate)) {aborted = 1;}
     }
@@ -683,10 +689,69 @@ static int update_teleop_with_check(int axis_num, simple_tp_t *the_tp, double se
     return 0;
 }
 
+/*
+ * Position-command override (DELTAsort).
+ *
+ * The override drives each axis' teleop planner toward axis.N.pos-cmd-override
+ * at a velocity latched when a new target arrives, split between the enabled
+ * axes in proportion to their distance so the move is (nearly) straight.
+ *
+ * Safety rules (see doc/override-safety.md):
+ *  - The override never re-enables a planner that LinuxCNC aborted. Any abort,
+ *    joint soft-limit hit or motion error puts it in HOLD; it only resumes when
+ *    a NEW target arrives that control.c has validated against the joint limits.
+ *  - Targets whose inverse kinematics violate a joint soft limit are refused.
+ *  - The [AXIS_n]MAX_VELOCITY limit is applied after the override.
+ */
 static double last_target[EMCMOT_MAX_AXIS] = {0};
+static double last_vel[EMCMOT_MAX_AXIS] = {0};
 static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};
-static double latched_max_acc[EMCMOT_MAX_AXIS] = {0};
+static double saved_pos[EMCMOT_MAX_AXIS] = {0};
 static bool first_move = true;
+static bool override_target_ok = true;  /* result of control.c's joint-limit check of the target */
+static unsigned int override_seq = 0;    /* motion.pos-cmd-override-seq */
+static unsigned int last_seq = 0;
+static bool seq_mode = false;           /* host uses the commit counter */
+
+void axis_override_set_seq(unsigned int seq)
+{
+    override_seq = seq;
+    if (seq != 0) {
+        seq_mode = true;
+    }
+}
+
+void axis_override_hold(void)
+{
+    override_hold = true;
+}
+
+bool axis_override_is_held(void)
+{
+    return override_hold;
+}
+
+void axis_override_set_target_ok(bool ok)
+{
+    override_target_ok = ok;
+}
+
+/* Called by control.c when the position reached this cycle would violate a joint
+ * soft limit: undo this cycle's step, stop, and hold until a new target. */
+void axis_override_reject_step(void)
+{
+    int n;
+    for (n = 0; n < EMCMOT_MAX_AXIS; n++) {
+        if (axis_get_pos_cmd_override_enable(n)) {
+            axis_array[n].teleop_tp.curr_pos = saved_pos[n];
+            axis_array[n].teleop_tp.curr_vel = 0.0;
+            axis_array[n].teleop_tp.enable = 0;
+            axis_array[n].teleop_tp.pos_cmd = saved_pos[n];
+            axis_array[n].pos_cmd = saved_pos[n];
+        }
+    }
+    override_hold = true;
+}
 
 int axis_calc_motion(double servo_period)
 {
@@ -697,32 +762,53 @@ int axis_calc_motion(double servo_period)
     double dist[EMCMOT_MAX_AXIS];
     double total_dist = 0.0;
     int new_move = 0;
+    int n;
 
-    // 1. Compute distances
-    for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
+    /* distances of the ENABLED axes only (disabled/unused axes must not
+       shrink the velocity split) */
+    for (n = 0; n < EMCMOT_MAX_AXIS; n++) {
+        dist[n] = 0.0;
+        saved_pos[n] = axis_array[n].teleop_tp.curr_pos;
+        if (!axis_get_pos_cmd_override_enable(n)) {
+            continue;
+        }
         double target = axis_get_pos_cmd_override(n);
         dist[n] = fabs(target - axis_array[n].teleop_tp.curr_pos);
         total_dist += dist[n] * dist[n];
-
-        if(axis_get_pos_cmd_override_enable(n) && target != last_target[n]) {
+        /* legacy hosts: a changed target or velocity starts a new move */
+        if (!seq_mode && (target != last_target[n] || axis_get_vel_cmd_override(n) != last_vel[n])) {
             new_move = 1;
         }
     }
     total_dist = sqrt(total_dist);
-    if (total_dist < 1e-4) total_dist = 1.0;
-
-    if((new_move || first_move) && total_dist > 0.0) {
-        first_move = false;
-        // latch max_vel and max_acc for each axis
-        for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
-            if(axis_get_pos_cmd_override_enable(n)) {
-                last_target[n] = axis_get_pos_cmd_override(n);
-                latched_max_vel[n] = axis_get_vel_cmd_override(n) * (dist[n] / total_dist);
-                latched_max_acc[n] = axis_array[n].acc_limit * (dist[n] / total_dist);
-            }
-        }
+    /* hosts using the commit counter: latch only on a commit, so a target is
+       never latched half-written, and re-sending the same target resumes */
+    if (seq_mode && override_seq != last_seq) {
+        last_seq = override_seq;
+        new_move = 1;
     }
 
+    if (new_move || first_move) {
+        first_move = false;
+        for (n = 0; n < EMCMOT_MAX_AXIS; n++) {
+            if (axis_get_pos_cmd_override_enable(n)) {
+                double share = (total_dist > 1e-6) ? dist[n] / total_dist : 0.0;
+                last_target[n] = axis_get_pos_cmd_override(n);
+                last_vel[n] = axis_get_vel_cmd_override(n);
+                latched_max_vel[n] = fabs(last_vel[n]) * share;
+                if (latched_max_vel[n] > axis_array[n].vel_limit) {
+                    latched_max_vel[n] = axis_array[n].vel_limit;   /* respect [AXIS_n]MAX_VELOCITY */
+                }
+            }
+        }
+        /* only a new, joint-limit-valid target releases a hold */
+        if (new_move && override_target_ok) {
+            override_hold = false;
+        }
+    }
+    if (!override_target_ok) {
+        override_hold = true;
+    }
 
     for (axis_num = 0; axis_num < EMCMOT_MAX_AXIS; axis_num++) {
         axis = &axis_array[axis_num];
@@ -732,11 +818,15 @@ int axis_calc_motion(double servo_period)
         }
 
         if (axis_get_pos_cmd_override_enable(axis_num)) {
-            // Set the trajectory planner's target to your override value
-            axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
-            axis->teleop_tp.enable = 1;
-            axis->teleop_tp.max_vel = latched_max_vel[axis_num];
-            axis->teleop_tp.max_acc = axis_array[axis_num].acc_limit;
+            axis->teleop_tp.max_acc = axis->acc_limit;
+            if (override_hold) {
+                /* do NOT re-enable after an abort: let the planner stop */
+                axis->teleop_tp.enable = 0;
+            } else {
+                axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
+                axis->teleop_tp.max_vel = latched_max_vel[axis_num];
+                axis->teleop_tp.enable = 1;
+            }
         }
 
         if (update_teleop_with_check(axis_num, &(axis->teleop_tp), servo_period)) {

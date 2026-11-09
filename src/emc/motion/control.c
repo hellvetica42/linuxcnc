@@ -155,6 +155,85 @@ static void handle_jjogwheels(void);
 /* 'get_pos_cmds()' generates the position setpoints.  This includes
    calling the trajectory planner and interpolating its outputs.
 */
+
+/* ---------------------------------------------------------------------------
+ * DELTAsort position-override safety helpers
+ * ------------------------------------------------------------------------- */
+
+/* true if any kinematic joint of `pose` is outside its soft limits (or unreachable) */
+static int override_pose_violates_limits(EmcPose *pose, int *bad_joint, double *bad_pos)
+{
+    double jp[EMCMOT_MAX_JOINTS];
+    KINEMATICS_INVERSE_FLAGS ifl = iflags;
+    KINEMATICS_FORWARD_FLAGS ffl = fflags;
+    int jn;
+    if (kinematicsInverse(pose, jp, &ifl, &ffl) != 0) {
+        *bad_joint = -1;
+        return 1;
+    }
+    for (jn = 0; jn < NO_OF_KINS_JOINTS; jn++) {
+        emcmot_joint_t *j = &joints[jn];
+        if (!isfinite(jp[jn]) || jp[jn] > j->max_pos_limit || jp[jn] < j->min_pos_limit) {
+            *bad_joint = jn;
+            *bad_pos = jp[jn];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Check the override target (x,y,z pins) against the joint limits every cycle;
+   a target outside them is refused (the robot does not start the move). */
+static void override_check_target(void)
+{
+    static int last_ok = 1;
+    EmcPose target = emcmotStatus->carte_pos_cmd;
+    int bad_joint = 0, ok;
+    double bad_pos = 0.0;
+    if (!axis_get_pos_cmd_override_enable(0) && !axis_get_pos_cmd_override_enable(1)
+        && !axis_get_pos_cmd_override_enable(2)) {
+        return;
+    }
+    target.tran.x = axis_get_pos_cmd_override(0);
+    target.tran.y = axis_get_pos_cmd_override(1);
+    target.tran.z = axis_get_pos_cmd_override(2);
+    ok = !override_pose_violates_limits(&target, &bad_joint, &bad_pos);
+    if (!ok && last_ok) {
+        if (bad_joint < 0) {
+            reportError(_("Override target (%.1f, %.1f, %.1f) is unreachable; refused"),
+                        target.tran.x, target.tran.y, target.tran.z);
+        } else {
+            reportError(_("Override target (%.1f, %.1f, %.1f) needs joint %d at %.2f, outside its soft limits; refused"),
+                        target.tran.x, target.tran.y, target.tran.z, bad_joint, bad_pos);
+        }
+    }
+    last_ok = ok;
+    axis_override_set_target_ok(ok);
+}
+
+/* After the teleop planners advanced this cycle: would the new commanded pose
+   put a joint outside its soft limits? (paths can cross the limit even when
+   both endpoints are valid, e.g. near the top of a delta's workspace) */
+static int override_step_violates_joint_limits(void)
+{
+    static int reported = 0;
+    int bad_joint = 0;
+    double bad_pos = 0.0;
+    if (axis_override_is_held()) {
+        reported = 0;
+        return 0;
+    }
+    if (override_pose_violates_limits(&emcmotStatus->carte_pos_cmd, &bad_joint, &bad_pos)) {
+        if (!reported) {
+            reportError(_("Override move stopped at joint %d soft limit (%.2f)"), bad_joint, bad_pos);
+            reported = 1;
+        }
+        return 1;
+    }
+    reported = 0;
+    return 0;
+}
+
 static void get_pos_cmds(long period);
 
 /* 'compute_screw_comp()' is responsible for calculating backlash and
@@ -1411,12 +1490,25 @@ static void get_pos_cmds(long period)
 	break;
 
     case EMCMOT_MOTION_TELEOP:
+        /* DELTAsort position override: validate the target and refuse any step
+           that would leave the joint soft limits (see axis.c) */
+        override_check_target();
+        axis_override_set_seq(*(emcmot_hal_data->override_seq));
+
         ext_offset_teleop_limit = axis_calc_motion(servo_period);
         if (!ext_offset_teleop_limit) {
             ext_offset_coord_limit = 0; //in case was set in prior coord motion
         }
 
         axis_sync_carte_pos_to_teleop_tp(+1, pcmd_p); // teleop
+        if (override_step_violates_joint_limits()) {
+            /* stop AT the limit instead of letting the backup soft-limit check
+               abort every cycle while the override keeps re-enabling (which made
+               the robot creep past the limit at max_acc*period per cycle) */
+            axis_override_reject_step();
+            axis_sync_carte_pos_to_teleop_tp(+1, pcmd_p);
+        }
+        *(emcmot_hal_data->override_held) = axis_override_is_held();
 
 	if ( axis_jog_is_active() ) {
 	    /* is any limit disabled for this move? */
