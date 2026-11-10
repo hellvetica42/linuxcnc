@@ -684,7 +684,7 @@ static int update_teleop_with_check(int axis_num, simple_tp_t *the_tp, double se
 }
 
 static double last_target[EMCMOT_MAX_AXIS] = {0};
-static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};
+static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};  /* commanded path velocity, latched per move */
 static double latched_max_acc[EMCMOT_MAX_AXIS] = {0};
 static bool first_move = true;
 
@@ -717,7 +717,7 @@ int axis_calc_motion(double servo_period)
         for (int n = 0; n < EMCMOT_MAX_AXIS; n++) {
             if(axis_get_pos_cmd_override_enable(n)) {
                 last_target[n] = axis_get_pos_cmd_override(n);
-                latched_max_vel[n] = axis_get_vel_cmd_override(n) * (dist[n] / total_dist);
+                latched_max_vel[n] = axis_get_vel_cmd_override(n);
                 latched_max_acc[n] = axis_array[n].acc_limit * (dist[n] / total_dist);
             }
         }
@@ -735,7 +735,12 @@ int axis_calc_motion(double servo_period)
             // Set the trajectory planner's target to your override value
             axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
             axis->teleop_tp.enable = 1;
-            axis->teleop_tp.max_vel = latched_max_vel[axis_num];
+            /* Split the latched path velocity over the axes by the REMAINING distance,
+               every cycle, so the velocity limits always point straight at the target.
+               Splitting by the distance at latch time stalls an axis that is passing its
+               new target coordinate when a move is re-targeted mid-flight: it gets a ~0
+               share, overshoots while braking and then crawls back (or never returns). */
+            axis->teleop_tp.max_vel = fabs(latched_max_vel[axis_num]) * (dist[axis_num] / total_dist);
             axis->teleop_tp.max_acc = axis_array[axis_num].acc_limit;
         }
 
