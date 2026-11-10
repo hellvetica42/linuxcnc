@@ -705,7 +705,7 @@ static int update_teleop_with_check(int axis_num, simple_tp_t *the_tp, double se
  */
 static double last_target[EMCMOT_MAX_AXIS] = {0};
 static double last_vel[EMCMOT_MAX_AXIS] = {0};
-static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};
+static double latched_max_vel[EMCMOT_MAX_AXIS] = {0};  /* commanded path velocity, latched per move */
 static double saved_pos[EMCMOT_MAX_AXIS] = {0};
 static bool first_move = true;
 static bool override_target_ok = true;  /* result of control.c's joint-limit check of the target */
@@ -792,13 +792,9 @@ int axis_calc_motion(double servo_period)
         first_move = false;
         for (n = 0; n < EMCMOT_MAX_AXIS; n++) {
             if (axis_get_pos_cmd_override_enable(n)) {
-                double share = (total_dist > 1e-6) ? dist[n] / total_dist : 0.0;
                 last_target[n] = axis_get_pos_cmd_override(n);
                 last_vel[n] = axis_get_vel_cmd_override(n);
-                latched_max_vel[n] = fabs(last_vel[n]) * share;
-                if (latched_max_vel[n] > axis_array[n].vel_limit) {
-                    latched_max_vel[n] = axis_array[n].vel_limit;   /* respect [AXIS_n]MAX_VELOCITY */
-                }
+                latched_max_vel[n] = fabs(last_vel[n]);
             }
         }
         /* only a new, joint-limit-valid target releases a hold */
@@ -823,8 +819,18 @@ int axis_calc_motion(double servo_period)
                 /* do NOT re-enable after an abort: let the planner stop */
                 axis->teleop_tp.enable = 0;
             } else {
+                /* Split the latched path velocity over the axes by the REMAINING distance,
+                   every cycle, so the velocity limits always point straight at the target.
+                   Splitting by the distance at latch time stalls an axis that is passing its
+                   new target coordinate when a move is re-targeted mid-flight: it gets a ~0
+                   share, overshoots while braking and then crawls back (or never returns). */
+                double share = (total_dist > 1e-6) ? dist[axis_num] / total_dist : 0.0;
+                double max_vel = latched_max_vel[axis_num] * share;
+                if (max_vel > axis->vel_limit) {
+                    max_vel = axis->vel_limit;   /* respect [AXIS_n]MAX_VELOCITY */
+                }
                 axis->teleop_tp.pos_cmd = axis_get_pos_cmd_override(axis_num);
-                axis->teleop_tp.max_vel = latched_max_vel[axis_num];
+                axis->teleop_tp.max_vel = max_vel;
                 axis->teleop_tp.enable = 1;
             }
         }
