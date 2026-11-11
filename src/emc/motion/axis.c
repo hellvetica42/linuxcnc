@@ -666,15 +666,21 @@ static int update_teleop_with_check(int axis_num, simple_tp_t *the_tp, double se
     if  ( (0 == axis->max_pos_limit) && (0 == axis->min_pos_limit) ) {
         return 0;
     }
-    if  ( (axis->ext_offset_tp.curr_pos + axis->teleop_tp.curr_pos)
-          >= axis->max_pos_limit) {
+    /* Only refuse steps that go past a limit or further beyond it. A step back
+       towards the range is always allowed: when teleop starts or the machine is
+       re-enabled the planner is synced to the measured position, and an arm resting
+       a hair beyond a limit (e.g. z at -349.94 with MAX_LIMIT = home = -350) would
+       otherwise have every step refused - the axis never moves again while the other
+       axes do (the arm then travels at the top of the workspace into its joint limits). */
+    double new_pos = axis->ext_offset_tp.curr_pos + axis->teleop_tp.curr_pos;
+    double old_pos = new_pos - the_tp->curr_pos + save_curr_pos;
+    if  ( new_pos >= axis->max_pos_limit && new_pos > old_pos ) {
         // positive error, restore save_curr_pos
         the_tp->curr_pos = save_curr_pos;
         the_tp->curr_vel = 0;
         return 1;
     }
-    if  ( (axis->ext_offset_tp.curr_pos + axis->teleop_tp.curr_pos)
-           <= axis->min_pos_limit) {
+    if  ( new_pos <= axis->min_pos_limit && new_pos < old_pos ) {
         // negative error, restore save_curr_pos
         the_tp->curr_pos = save_curr_pos;
         the_tp->curr_vel = 0;
